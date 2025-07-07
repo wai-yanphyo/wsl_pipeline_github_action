@@ -1,0 +1,15 @@
+name: Azure Deployment Pipeline
+
+on: [push]
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/webapp:${{ github.sha }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+  
