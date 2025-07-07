@@ -18,7 +18,7 @@ env:
   DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/webapp:${{ github.sha }}
 
 jobs:
-  # Always build and push the Docker image
+  # Always  build and push the Docker image
   build:
     runs-on: ubuntu-latest
     steps:
