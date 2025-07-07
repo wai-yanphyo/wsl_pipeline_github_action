@@ -46,8 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event.inputs.deploy_infrastructure == 'true' || 
-      contains(github.event.head_commit.message, '[infra]') ||
-      contains(github.event.head_commit.message, '[infrastructure]')
+      (github.event.head_commit && contains(github.event.head_commit.message, '[infra]')) ||
+      (github.event.head_commit && contains(github.event.head_commit.message, '[infrastructure]'))
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -126,8 +126,8 @@ jobs:
       always() && 
       needs.build.result == 'success' &&
       (needs.deploy-infrastructure.result == 'success' || needs.deploy-infrastructure.result == 'skipped') &&
-      !contains(github.event.head_commit.message, '[skip-deploy]') &&
-      !contains(github.event.head_commit.message, '[skip-deployment]')
+      !(github.event.head_commit && contains(github.event.head_commit.message, '[skip-deploy]')) &&
+      !(github.event.head_commit && contains(github.event.head_commit.message, '[skip-deployment]'))
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
