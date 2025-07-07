@@ -105,12 +105,12 @@ jobs:
       - name: Run Ansible Playbook
         run: |
           ansible-playbook \
-            -i "${{ env.PUBLIC_IP }}," \
+            -i "${PUBLIC_IP}," \
             -u adminuser \
             --private-key ~/.ssh/azure-container-key \
-            -e "docker_image=$DOCKER_IMAGE" \
+            -e "docker_image=${DOCKER_IMAGE}" \
             ansible/docker.yml
         env:
-          DOCKER_IMAGE: yourregistry/webapp:a50ab34904880b91f97e6ffc9418057b5a26bfdc
-          PUBLIC_IP: 4.227.202.193
-          ANSIBLE_HOST_KEY_CHECKING: "False"  
+          DOCKER_IMAGE: ${{ env.DOCKER_IMAGE }}
+          PUBLIC_IP: ${{ env.PUBLIC_IP }}  
+          ANSIBLE_HOST_KEY_CHECKING: "False"
