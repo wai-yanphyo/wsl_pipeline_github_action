@@ -3,7 +3,7 @@
   hosts: all
   become: true
   vars:
-    docker_image: "{{ lookup('env', 'DOCKER_IMAGE') }}"
+    docker_image: "{{ docker_image }}"
 
   tasks:
     - name: Update apt package index
@@ -22,17 +22,17 @@
           - python3-pip
         state: present
 
-    - name: Add Docker GPG key
+    - name: Add Docker’s official GPG key
       apt_key:
         url: https://download.docker.com/linux/ubuntu/gpg
         state: present
 
     - name: Add Docker repository
       apt_repository:
-        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu jammy stable"
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable"
         state: present
 
-    - name: Update apt cache again after adding Docker repo
+    - name: Update apt cache again
       apt:
         update_cache: yes
 
@@ -44,13 +44,13 @@
           - containerd.io
         state: present
 
-    - name: Start and enable Docker service
+    - name: Ensure Docker service is started and enabled
       systemd:
         name: docker
         state: started
         enabled: yes
 
-    - name: Install Docker SDK for Python (used by Ansible)
+    - name: Install Docker SDK for Python (for Ansible to work with Docker)
       pip:
         name: docker
 
@@ -59,10 +59,10 @@
         name: "{{ docker_image }}"
         source: pull
 
-    - name: Run web container
+    - name: Run container from image
       docker_container:
         name: webapp
         image: "{{ docker_image }}"
+        state: started
         ports:
           - "80:80"
-        state: started
