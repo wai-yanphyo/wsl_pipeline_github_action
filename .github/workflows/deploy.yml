@@ -1,107 +1,195 @@
 name: Azure Deployment Pipeline
 
-on:
+on: 
   push:
-    branches:
-      - main
-    paths:
-      - 'app/**'
-      - 'terraform/**'
-      - '.github/workflows/deploy.yml'
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      deploy_infrastructure:
+        description: 'Deploy infrastructure (use only for initial setup or infrastructure changes)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/webapp:${{ github.sha }}
 
 jobs:
+  # Always build and push the Docker image
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
+        
+      - name: Debug Docker image name
+        run: |
+          echo "Docker image will be: $DOCKER_IMAGE"
+          echo "Docker username: ${{ secrets.DOCKER_USERNAME }}"
+          echo "GitHub SHA: ${{ github.sha }}"
+          
       - name: Build Docker image
         run: docker build -t $DOCKER_IMAGE ./app
-
+        
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-
+          
       - name: Push Docker image
         run: docker push $DOCKER_IMAGE
 
-  provision:
+  # Only deploy infrastructure when [infra] is in commit message or manually requested
+  deploy-infrastructure:
     needs: build
-    if: |
-      contains(github.event.head_commit.message, '[infra]') ||
-      github.event.head_commit.message == '' || github.event_name == 'push'
     runs-on: ubuntu-latest
-    outputs:
-      public_ip: ${{ steps.get-ip.outputs.public_ip }}
+    if: |
+      github.event.inputs.deploy_infrastructure == 'true' || 
+      contains(github.event.head_commit.message, '[infra]') ||
+      contains(github.event.head_commit.message, '[infrastructure]')
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
+        
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_wrapper: false
-
+          
       - name: Install Azure CLI
         run: |
           curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          
+      - name: Azure Login with Retry
+        run: |
+          for i in {1..3}; do
+            echo "Login attempt $i"
+            if az login -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }}; then
+              echo "Login successful"
+              break
+            else
+              echo "Login failed, retrying..."
+              sleep 10
+            fi
+          done
+          
+          # Set subscription
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          
+          # Verify
+          echo "Current account:"
+          az account show
 
+      - name: Terraform Init
+        run: |
+          cd ./terraform
+          terraform init
+          
+      - name: Terraform Plan
+        run: |
+          cd ./terraform
+          terraform plan
+        env:
+          ARM_USE_CLI: true
+          
+      - name: Terraform Apply
+        run: |
+          cd ./terraform
+          terraform apply -auto-approve
+        env:
+          ARM_USE_CLI: true
+          
+      - name: Get Public IP
+        run: |
+          cd ./terraform
+          IP=$(terraform output -raw public_ip)
+          echo "PUBLIC_IP=$IP" >> $GITHUB_ENV
+          echo "Deployed to IP: $IP"
+          
+      - name: Save Public IP as artifact
+        run: |
+          echo "${{ env.PUBLIC_IP }}" > public_ip.txt
+          
+      - name: Upload Public IP artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: public-ip
+          path: public_ip.txt
+
+  # Always deploy the application (unless infrastructure deployment failed or skip is requested)
+  deploy-application:
+    needs: [build]
+    runs-on: ubuntu-latest
+    # Run if infrastructure job was skipped OR if it completed successfully, and skip is not requested
+    if: |
+      always() && 
+      needs.build.result == 'success' &&
+      (needs.deploy-infrastructure.result == 'success' || needs.deploy-infrastructure.result == 'skipped') &&
+      !contains(github.event.head_commit.message, '[skip-deploy]') &&
+      !contains(github.event.head_commit.message, '[skip-deployment]')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Install Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          
       - name: Azure Login
         run: |
           az login -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }}
           az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
+          
       - name: Write SSH keys
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.AZURE_SSH_PUBLIC_KEY }}" > ~/.ssh/azure-container-key.pub
           echo "${{ secrets.AZURE_SSH_PRIVATE_KEY }}" > ~/.ssh/azure-container-key
           chmod 600 ~/.ssh/azure-container-key*
-
-      - name: Terraform Init
-        run: cd ./terraform && terraform init
-
-      - name: Terraform Apply
-        run: cd ./terraform && terraform apply -auto-approve
-
-      - name: Get Public IP
-        id: get-ip
+          
+      - name: Get Public IP from infrastructure or existing resources
         run: |
-          cd ./terraform
-          IP=$(terraform output -raw public_ip 2>/dev/null || echo "")
-          echo "public_ip=$IP"
-          echo "public_ip=$IP" >> $GITHUB_OUTPUT
-
-  deploy:
-    needs: [build, provision]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
+          # Try to download artifact from infrastructure job first
+          if az storage blob exists --account-name "yourstorageaccount" --container-name "deployment-artifacts" --name "public_ip.txt" 2>/dev/null; then
+            echo "Getting IP from previous infrastructure deployment..."
+            # Alternative: Get IP from existing Azure resources
+            PUBLIC_IP=$(az vm list-ip-addresses --resource-group "your-resource-group" --name "your-vm-name" --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
+          else
+            # Fallback: Get IP from Terraform state or Azure resources
+            echo "Getting IP from existing Azure resources..."
+            PUBLIC_IP=$(az vm list-ip-addresses --resource-group "your-resource-group" --name "your-vm-name" --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
+          fi
+          
+          echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+          echo "Deploying to IP: $PUBLIC_IP"
+          
+      - name: Download Public IP artifact (if available)
+        uses: actions/download-artifact@v3
+        with:
+          name: public-ip
+        continue-on-error: true
+        
+      - name: Use artifact IP if available
+        run: |
+          if [ -f public_ip.txt ]; then
+            PUBLIC_IP=$(cat public_ip.txt)
+            echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+            echo "Using IP from artifact: $PUBLIC_IP"
+          fi
+          
       - name: Setup Ansible
         run: sudo apt update && sudo apt install -y ansible
-
-      - name: Write SSH keys
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AZURE_SSH_PRIVATE_KEY }}" > ~/.ssh/azure-container-key
-          chmod 600 ~/.ssh/azure-container-key
-
+        
       - name: Run Ansible Playbook
         run: |
-          echo "Connecting to ${{ needs.provision.outputs.public_ip }}"
           ansible-playbook \
-            -i "${{ needs.provision.outputs.public_ip }}," \
+            -i "${PUBLIC_IP}," \
             -u azureuser \
             --private-key ~/.ssh/azure-container-key \
-            -e "docker_image=${{ env.DOCKER_IMAGE }}" \
+            -e "docker_image=${DOCKER_IMAGE}" \
             ansible/docker.yml
         env:
+          DOCKER_IMAGE: ${{ env.DOCKER_IMAGE }}
+          PUBLIC_IP: ${{ env.PUBLIC_IP }}
           ANSIBLE_HOST_KEY_CHECKING: "False"
