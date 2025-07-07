@@ -106,7 +106,7 @@ jobs:
         run: |
           ansible-playbook \
             -i "${PUBLIC_IP}," \
-            -u adminuser \
+            -u azureuser \
             --private-key ~/.ssh/azure-container-key \
             -e "docker_image=${DOCKER_IMAGE}" \
             ansible/docker.yml
