@@ -1,0 +1,58 @@
+---
+- name: Configure Docker on Azure VM
+  hosts: all
+  become: true
+  vars:
+    docker_image: "{{ lookup('env', 'DOCKER_IMAGE') }}"
+
+  tasks:
+    - name: Update apt package index
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu jammy stable"
+        state: present
+
+    - name: Install Docker CE
+      apt:
+        name: docker-ce
+        state: present
+
+    - name: Start and enable Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Install Docker SDK for Python
+      pip:
+        name: docker
+
+    - name: Pull Docker image
+      docker_image:
+        name: "{{ docker_image }}"
+        source: pull
+
+    - name: Run web container
+      docker_container:
+        name: webapp
+        image: "{{ docker_image }}"
+        ports:
+          - "80:80"
+        state: started
