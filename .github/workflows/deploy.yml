@@ -18,7 +18,6 @@ env:
   DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/webapp:${{ github.sha }}
 
 jobs:
-  # Always  build and push the Docker image
   build:
     runs-on: ubuntu-latest
     steps:
@@ -43,14 +42,13 @@ jobs:
       - name: Push Docker image
         run: docker push $DOCKER_IMAGE
 
-  # Only deploy infrastructure when [infra] is in commit message or manually requested
-  deploy-infrastructure:
+  deploy:
     needs: build
     runs-on: ubuntu-latest
+    # Only run if [infra] is in commit message OR manually requested with infrastructure=true
     if: |
       (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_infrastructure == 'true') || 
-      (github.event_name == 'push' && contains(github.event.head_commit.message, '[infra]')) ||
-      (github.event_name == 'push' && contains(github.event.head_commit.message, '[infrastructure]'))
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[infra]'))
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -84,6 +82,13 @@ jobs:
           echo "Current account:"
           az account show
 
+      - name: Write SSH keys
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AZURE_SSH_PUBLIC_KEY }}" > ~/.ssh/azure-container-key.pub
+          echo "${{ secrets.AZURE_SSH_PRIVATE_KEY }}" > ~/.ssh/azure-container-key
+          chmod 600 ~/.ssh/azure-container-key*
+          
       - name: Terraform Init
         run: |
           cd ./terraform
@@ -110,27 +115,30 @@ jobs:
           echo "PUBLIC_IP=$IP" >> $GITHUB_ENV
           echo "Deployed to IP: $IP"
           
-      - name: Save Public IP as artifact
+      - name: Setup Ansible
+        run: sudo apt update && sudo apt install -y ansible
+        
+      - name: Run Ansible Playbook
         run: |
-          echo "${{ env.PUBLIC_IP }}" > public_ip.txt
-          
-      - name: Upload Public IP artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: public-ip
-          path: public_ip.txt
+          ansible-playbook \
+            -i "${PUBLIC_IP}," \
+            -u azureuser \
+            --private-key ~/.ssh/azure-container-key \
+            -e "docker_image=${DOCKER_IMAGE}" \
+            ansible/docker.yml
+        env:
+          DOCKER_IMAGE: ${{ env.DOCKER_IMAGE }}
+          PUBLIC_IP: ${{ env.PUBLIC_IP }}
+          ANSIBLE_HOST_KEY_CHECKING: "False"
 
-  # Always deploy the application (unless infrastructure deployment failed or skip is requested)
-  deploy-application:
-    needs: [build]
+  # New job for app-only deployment
+  deploy-app-only:
+    needs: build
     runs-on: ubuntu-latest
-    # Run if infrastructure job was skipped OR if it completed successfully, and skip is not requested
+    # Only run if [infra] is NOT in commit message AND not manually triggered with infrastructure
     if: |
-      always() && 
-      needs.build.result == 'success' &&
-      (needs.deploy-infrastructure.result == 'success' || needs.deploy-infrastructure.result == 'skipped') &&
-      !(github.event_name == 'push' && contains(github.event.head_commit.message, '[skip-deploy]')) &&
-      !(github.event_name == 'push' && contains(github.event.head_commit.message, '[skip-deployment]'))
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_infrastructure == 'false') || 
+      (github.event_name == 'push' && !contains(github.event.head_commit.message, '[infra]'))
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -151,35 +159,12 @@ jobs:
           echo "${{ secrets.AZURE_SSH_PRIVATE_KEY }}" > ~/.ssh/azure-container-key
           chmod 600 ~/.ssh/azure-container-key*
           
-      - name: Get Public IP from infrastructure or existing resources
+      - name: Get Public IP from existing resources
         run: |
-          # Try to download artifact from infrastructure job first
-          if az storage blob exists --account-name "yourstorageaccount" --container-name "deployment-artifacts" --name "public_ip.txt" 2>/dev/null; then
-            echo "Getting IP from previous infrastructure deployment..."
-            # Alternative: Get IP from existing Azure resources
-            PUBLIC_IP=$(az vm list-ip-addresses --resource-group "your-resource-group" --name "your-vm-name" --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
-          else
-            # Fallback: Get IP from Terraform state or Azure resources
-            echo "Getting IP from existing Azure resources..."
-            PUBLIC_IP=$(az vm list-ip-addresses --resource-group "your-resource-group" --name "your-vm-name" --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
-          fi
-          
+          # Get IP from existing Azure VM (replace with your actual resource group and VM name)
+          PUBLIC_IP=$(az vm list-ip-addresses --resource-group "your-resource-group" --name "your-vm-name" --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
           echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
-          echo "Deploying to IP: $PUBLIC_IP"
-          
-      - name: Download Public IP artifact (if available)
-        uses: actions/download-artifact@v4
-        with:
-          name: public-ip
-        continue-on-error: true
-        
-      - name: Use artifact IP if available
-        run: |
-          if [ -f public_ip.txt ]; then
-            PUBLIC_IP=$(cat public_ip.txt)
-            echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
-            echo "Using IP from artifact: $PUBLIC_IP"
-          fi
+          echo "Deploying to existing IP: $PUBLIC_IP"
           
       - name: Setup Ansible
         run: sudo apt update && sudo apt install -y ansible
