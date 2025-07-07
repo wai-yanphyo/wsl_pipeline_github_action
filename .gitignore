@@ -1,0 +1,11 @@
+# Ignore Terraform plugin/cache state
+**/.terraform/*
+*.tfstate
+*.tfstate.backup
+*.log
+*.exe
+.terraform/
+*.tfstate
+*.tfstate.backup
+crash.log
+.terraform/
