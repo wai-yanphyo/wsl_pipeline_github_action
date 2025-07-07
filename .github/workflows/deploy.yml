@@ -65,6 +65,13 @@ jobs:
           # Verify
           echo "Current account:"
           az account show
+
+      - name: Write SSH keys
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AZURE_SSH_PUBLIC_KEY }}" > ~/.ssh/azure-container-key.pub
+          echo "${{ secrets.AZURE_SSH_PRIVATE_KEY }}" > ~/.ssh/azure-container-key
+          chmod 600 ~/.ssh/azure-container-key*
       
       - name: Terraform Init
         run: |
