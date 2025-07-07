@@ -1,6 +1,13 @@
 name: Azure Deployment Pipeline
 
-on: [push]
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app/**'
+      - 'terraform/**'
+      - '.github/workflows/deploy.yml'
 
 env:
   DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/webapp:${{ github.sha }}
@@ -11,12 +18,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
-      - name: Debug Docker image name
-        run: |
-          echo "Docker image will be: $DOCKER_IMAGE"
-          echo "Docker username: ${{ secrets.DOCKER_USERNAME }}"
-          echo "GitHub SHA: ${{ github.sha }}"
 
       - name: Build Docker image
         run: docker build -t $DOCKER_IMAGE ./app
@@ -30,9 +31,14 @@ jobs:
       - name: Push Docker image
         run: docker push $DOCKER_IMAGE
 
-  deploy:
+  provision:
     needs: build
+    if: |
+      contains(github.event.head_commit.message, '[infra]') ||
+      github.event.head_commit.message == '' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    outputs:
+      public_ip: ${{ steps.get-ip.outputs.public_ip }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -46,20 +52,10 @@ jobs:
         run: |
           curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
-      - name: Azure Login with Retry
+      - name: Azure Login
         run: |
-          for i in {1..3}; do
-            echo "Login attempt $i"
-            if az login -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }}; then
-              echo "Login successful"
-              break
-            else
-              echo "Login failed, retrying..."
-              sleep 10
-            fi
-          done
+          az login -u ${{ secrets.AZURE_USERNAME }} -p ${{ secrets.AZURE_PASSWORD }}
           az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          az account show
 
       - name: Write SSH keys
         run: |
@@ -69,57 +65,43 @@ jobs:
           chmod 600 ~/.ssh/azure-container-key*
 
       - name: Terraform Init
-        run: |
-          cd ./terraform
-          terraform init
-
-      - name: Terraform Plan
-        run: |
-          cd ./terraform
-          terraform plan
-        env:
-          ARM_USE_CLI: true
+        run: cd ./terraform && terraform init
 
       - name: Terraform Apply
-        run: |
-          cd ./terraform
-          terraform apply -auto-approve
-        env:
-          ARM_USE_CLI: true
+        run: cd ./terraform && terraform apply -auto-approve
 
       - name: Get Public IP
         id: get-ip
         run: |
           cd ./terraform
-          echo "Fetching public IP..."
           IP=$(terraform output -raw public_ip 2>/dev/null || echo "")
           echo "public_ip=$IP"
           echo "public_ip=$IP" >> $GITHUB_OUTPUT
 
-      - name: Export IP to ENV
-        run: |
-          echo "PUBLIC_IP=${{ steps.get-ip.outputs.public_ip }}" >> $GITHUB_ENV
-
-      - name: Debug Public IP
-        run: |
-          echo "PUBLIC_IP=${PUBLIC_IP}"
-          if [[ -z "$PUBLIC_IP" ]]; then
-            echo "❌ PUBLIC_IP is empty. Check Terraform output."
-            exit 1
-          fi
+  deploy:
+    needs: [build, provision]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
 
       - name: Setup Ansible
         run: sudo apt update && sudo apt install -y ansible
 
+      - name: Write SSH keys
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AZURE_SSH_PRIVATE_KEY }}" > ~/.ssh/azure-container-key
+          chmod 600 ~/.ssh/azure-container-key
+
       - name: Run Ansible Playbook
         run: |
+          echo "Connecting to ${{ needs.provision.outputs.public_ip }}"
           ansible-playbook \
-            -i "${PUBLIC_IP}," \
+            -i "${{ needs.provision.outputs.public_ip }}," \
             -u azureuser \
             --private-key ~/.ssh/azure-container-key \
-            -e "docker_image=${DOCKER_IMAGE}" \
+            -e "docker_image=${{ env.DOCKER_IMAGE }}" \
             ansible/docker.yml
         env:
-          DOCKER_IMAGE: ${{ env.DOCKER_IMAGE }}
-          PUBLIC_IP: ${{ env.PUBLIC_IP }}
           ANSIBLE_HOST_KEY_CHECKING: "False"
