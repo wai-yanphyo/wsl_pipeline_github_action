@@ -76,7 +76,7 @@ jobs:
           cd ./terraform
           terraform plan
         env:
-          ARM_USE_CLI: false
+          ARM_USE_CLI: true
       
       - name: Terraform Apply
         run: |
