@@ -1,13 +1,6 @@
 name: Azure Deployment Pipeline
 
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'app/**'                       # App code changes (always build+deploy)
-      - 'terraform/**'                # Infra changes (trigger terraform)
-      - '.github/workflows/deploy.yml'
+on: [push]
 
 env:
   DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/webapp:${{ github.sha }}
@@ -37,8 +30,7 @@ jobs:
       - name: Push Docker image
         run: docker push $DOCKER_IMAGE
 
-  provision:
-    if: contains(github.event.head_commit.message, '[infra]') || github.event_name == 'push' && github.event.commits.*.modified.* contains 'terraform/'
+  deploy:
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -66,7 +58,12 @@ jobs:
               sleep 10
             fi
           done
+          
+          # Set subscription
           az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          
+          # Verify
+          echo "Current account:"
           az account show
 
       - name: Write SSH keys
@@ -77,46 +74,43 @@ jobs:
           chmod 600 ~/.ssh/azure-container-key*
       
       - name: Terraform Init
-        run: cd ./terraform && terraform init
-
-      - name: Terraform Apply
-        run: cd ./terraform && terraform apply -auto-approve
+        run: |
+          cd ./terraform
+          terraform init
+      
+      - name: Terraform Plan
+        run: |
+          cd ./terraform
+          terraform plan
         env:
           ARM_USE_CLI: true
-
+      
+      - name: Terraform Apply
+        run: |
+          cd ./terraform
+          terraform apply -auto-approve
+        env:
+          ARM_USE_CLI: true
+      
       - name: Get Public IP
         run: |
           cd ./terraform
           IP=$(terraform output -raw public_ip)
           echo "PUBLIC_IP=$IP" >> $GITHUB_ENV
           echo "Deployed to IP: $IP"
-
-  deploy:
-    needs: [build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Write SSH keys
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AZURE_SSH_PUBLIC_KEY }}" > ~/.ssh/azure-container-key.pub
-          echo "${{ secrets.AZURE_SSH_PRIVATE_KEY }}" > ~/.ssh/azure-container-key
-          chmod 600 ~/.ssh/azure-container-key*
-
+      
       - name: Setup Ansible
         run: sudo apt update && sudo apt install -y ansible
-
+      
       - name: Run Ansible Playbook
         run: |
           ansible-playbook \
-            -i "${{ env.PUBLIC_IP }}," \
+            -i "${PUBLIC_IP}," \
             -u azureuser \
             --private-key ~/.ssh/azure-container-key \
             -e "docker_image=${DOCKER_IMAGE}" \
             ansible/docker.yml
         env:
           DOCKER_IMAGE: ${{ env.DOCKER_IMAGE }}
-          PUBLIC_IP: ${{ env.PUBLIC_IP }}
+          PUBLIC_IP: ${{ env.PUBLIC_IP }}  
           ANSIBLE_HOST_KEY_CHECKING: "False"
