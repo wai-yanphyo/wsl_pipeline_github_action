@@ -117,7 +117,7 @@ jobs:
           name: public-ip
           path: public_ip.txt
 
-  # Always deploy the application (unless infrastructure deployment failed or skip is requested)
+  #m Always deploy the application (unless infrastructure deployment failed or skip is requested)
   deploy-application:
     needs: [build]
     runs-on: ubuntu-latest
