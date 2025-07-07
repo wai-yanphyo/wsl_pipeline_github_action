@@ -8,8 +8,11 @@ on:
       deploy_infrastructure:
         description: 'Deploy infrastructure (use only for initial setup or infrastructure changes)'
         required: false
-        default: false
-        type: boolean
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 env:
   DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/webapp:${{ github.sha }}
@@ -20,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         
       - name: Debug Docker image name
         run: |
@@ -45,12 +48,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: |
-      github.event.inputs.deploy_infrastructure == 'true' || 
-      (github.event.head_commit && contains(github.event.head_commit.message, '[infra]')) ||
-      (github.event.head_commit && contains(github.event.head_commit.message, '[infrastructure]'))
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_infrastructure == 'true') || 
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[infra]')) ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[infrastructure]'))
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
@@ -112,12 +115,12 @@ jobs:
           echo "${{ env.PUBLIC_IP }}" > public_ip.txt
           
       - name: Upload Public IP artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: public-ip
           path: public_ip.txt
 
-  #m Always deploy the application (unless infrastructure deployment failed or skip is requested)
+  # Always deploy the application (unless infrastructure deployment failed or skip is requested)
   deploy-application:
     needs: [build]
     runs-on: ubuntu-latest
@@ -126,11 +129,11 @@ jobs:
       always() && 
       needs.build.result == 'success' &&
       (needs.deploy-infrastructure.result == 'success' || needs.deploy-infrastructure.result == 'skipped') &&
-      !(github.event.head_commit && contains(github.event.head_commit.message, '[skip-deploy]')) &&
-      !(github.event.head_commit && contains(github.event.head_commit.message, '[skip-deployment]'))
+      !(github.event_name == 'push' && contains(github.event.head_commit.message, '[skip-deploy]')) &&
+      !(github.event_name == 'push' && contains(github.event.head_commit.message, '[skip-deployment]'))
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         
       - name: Install Azure CLI
         run: |
@@ -165,7 +168,7 @@ jobs:
           echo "Deploying to IP: $PUBLIC_IP"
           
       - name: Download Public IP artifact (if available)
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: public-ip
         continue-on-error: true
