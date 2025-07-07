@@ -110,3 +110,7 @@ jobs:
             --private-key ~/.ssh/azure-container-key \
             -e "docker_image=$DOCKER_IMAGE" \
             ansible/docker.yml
+        env:
+          DOCKER_IMAGE: yourregistry/webapp:a50ab34904880b91f97e6ffc9418057b5a26bfdc
+          PUBLIC_IP: 4.227.202.193
+          ANSIBLE_HOST_KEY_CHECKING: "False"  
